@@ -1,0 +1,112 @@
+# Copy this file for another team. Replace project, field, issue type, option and status IDs.
+# All IDs and settings below are synthetic placeholders. Replace them before calling Jira.
+# One configuration per team. Match Jira entities by IDs, never display names.
+# Use [] to include all assignees; otherwise list Jira account IDs at the period end.
+assignee_ids: []
+
+jira:
+  # Project key and allowed issue type IDs. Exclude epics and subtasks explicitly.
+  project_key: DEMO
+  issue_type_ids: ["1", "2", "3"]
+  # Optional board ID: validates the configured status-to-column grouping.
+  board_id: null
+
+fields:
+  # Canonical field IDs from GET /rest/api/3/field; display names are rejected.
+  priority_id: customfield_10001
+  assignee_id: assignee
+  estimate_id: customfield_10002
+
+period:
+  # ISO 8601 with explicit offsets. Start is inclusive; end is exclusive.
+  start: "2026-01-01T00:00:00+00:00"
+  end: "2026-04-01T00:00:00+00:00"
+  # Weekly boundaries and report display use this time zone.
+  timezone: UTC
+
+columns:
+  # Stable local keys; labels are display-only. Each Jira status may occur once.
+  todo:
+    label: TO DO
+    status_ids: ["1", "2"]
+  refinement:
+    label: REFINEMENT
+    status_ids: ["3"]
+  development:
+    label: IN PROGRESS
+    status_ids: ["4", "5", "6"]
+  review:
+    label: REVIEW
+    status_ids: ["7"]
+  production:
+    label: PRODUCTION
+    status_ids: ["8", "9"]
+  check:
+    label: CHECK
+    status_ids: ["10"]
+  done:
+    label: DONE
+    status_ids: ["11"]
+
+metrics:
+  throughput:
+    # null accepts any previous state. A start boundary requires an earlier visit.
+    start: null
+    # type: status uses a Jira ID; type: column uses a local key from columns.
+    end: {type: column, id: done}
+
+  lead_time:
+    start: {type: status, id: "4"}
+    end: {type: status, id: "11"}
+    # Allowed values for both events: first_entry or last_entry.
+    start_event: first_entry
+    end_event: last_entry
+    # true excludes issues reopened and unfinished at the cutoff.
+    require_end_state: true
+    histogram_bin_days: 5
+    # Pool issue durations across this many calendar weeks, then take the median.
+    rolling_weeks: 4
+
+  cfd:
+    # Subtract the initial inventory only for this column and its statuses on plots.
+    done_column: done
+
+  aging:
+    # first_entry_to_last_exit includes time elsewhere between returns.
+    # sum_visits counts only time actually inside the status/column.
+    method: first_entry_to_last_exit
+
+  decomposition:
+    # Parent/subtask relations always count. Replace with your split-into link type IDs.
+    # Find IDs/directions with GET /rest/api/3/issueLinkType. [] disables split links.
+    split_link_type_ids: []
+
+  estimate_accuracy:
+    # Allowed: ordinal, story_points, seconds, hours, days.
+    unit: ordinal
+    # Freeze the estimate immediately before entering its scope for the first time.
+    estimate_at: first_scope_entry
+    # The estimate covers these columns; the order does not affect summed duration.
+    scope_columns: [development, review]
+    actual_duration: sum_visits
+    # calendar includes nights/weekends; working requires the schedule below.
+    time_basis: calendar
+    # X is lead time in days. Merge issues in equal-width bins to show frequency.
+    frequency_bin_days: 1
+    # Bottom-to-top Y order, matched by option ID. Labels never select Jira data.
+    options:
+      - {id: "101", label: XS}
+      - {id: "102", label: S}
+      - {id: "103", label: M}
+      - {id: "104", label: L}
+      - {id: "105", label: XL}
+    working_calendar:
+      # Monday=0 ... Sunday=6. Used only when time_basis is working.
+      weekdays: [0, 1, 2, 3, 4]
+      start: "09:00"
+      end: "17:00"
+      holidays: []
+
+# Relative YAML paths resolve against this file's directory.
+# A run creates exactly five files in <project_key>-<UTC timestamp>.
+output_root: ../output
