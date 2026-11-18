@@ -3,8 +3,14 @@ name = "jira-flow-report"
 version = "0.1.0"
 description = "Configurable Jira flow reports with offline HTML and reproducible issue exports"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = ["PyYAML>=6.0.2,<7", "python-dotenv>=1.1,<2", "tzdata>=2025.1"]
+
+[project.urls]
+Repository = "https://github.com/letya999/jira-flow-report"
+Issues = "https://github.com/letya999/jira-flow-report/issues"
 
 [project.scripts]
 jira-flow = "jira_flow.cli:main"
@@ -15,7 +21,7 @@ build-backend = "uv_build"
 
 [tool.uv.build-backend]
 module-name = "jira_flow"
-source-include = ["configs/example.yaml", "tests/**", ".githooks/**", ".repo-safety/**", "AGENTS.md", ".env.example", ".gitattributes", ".gitignore"]
+source-include = ["configs/example.yaml", "tests/**", "examples/**", "docs/**", "README.ru.md", "CONTRIBUTING.md", "SECURITY.md", ".githooks/**", ".repo-safety/**", "AGENTS.md", ".env.example", ".gitattributes", ".gitignore"]
 source-exclude = [".repo-safety/reports/**", ".repo-safety/logs/**"]
 
 [dependency-groups]

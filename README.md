@@ -1,283 +1,224 @@
-# Jira Flow Report
+<h1 align="center">Jira Flow Report</h1>
+<p align="center"><strong>Understand how work moves through your Jira board.</strong><br>Configurable flow metrics, complete issue histories and a dashboard you can share as one HTML file.</p>
+<p align="center"><strong>English</strong> · <a href="README.ru.md">Русский</a></p>
+<p align="center">
+<a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-174e52" alt="MIT license"></a>
+<a href="pyproject.toml"><img src="https://img.shields.io/badge/Python-3.12%2B-1d5fbf" alt="Python 3.12 or newer"></a>
+<a href="#try-the-demo"><img src="https://img.shields.io/badge/demo-no_Jira_required-174e52" alt="Demo requires no Jira account"></a>
+</p>
 
-Отчёт о потоке задач Jira. Python рассчитывает метрики; готовый HTML содержит данные графиков,
-скрипты, стили и шрифт и открывается без Jira, сервера и интернета. Раздела выводов нет.
+![Report overview: project scope, completion counts and weekly throughput by person. All data is synthetic.](docs/screenshots/overview.png)
 
-## Запуск
+For delivery leads, engineering managers and teams reviewing queues, long-running work and delivery times.
+Choose a project, issue types, people, period and workflow in YAML. Python reconstructs the histories;
+the generated report embeds its data, charts, styles and fonts and works offline.
 
-Требуется `uv`. Версия Python зафиксирована в `.python-version`, зависимости — в `uv.lock`.
+**Seven sections · nine charts · one reusable template.** The current report interface is in Russian;
+configuration comments and this guide are in English. There is no Node.js build or hosted service.
 
-```powershell
+[Try the demo](#try-the-demo) · [Connect Jira](#connect-your-jira) · [Configuration](#configuration)
+· [Metric definitions](docs/metrics.md) · [Contributing](CONTRIBUTING.md)
+
+## What you can inspect
+
+| Section | Questions it helps answer |
+| --- | --- |
+| **Throughput** | How many distinct issues reach completion each week? Split by person, type and business priority. |
+| **Lead time** | How long does delivery take? Distribution, rolling median, P85 and group comparisons. |
+| **Cumulative flow (CFD)** | Where does work accumulate? Separate diagrams for board columns and Jira statuses. |
+| **Aging time** | How long do completed passages through each stage take? Compare people and stage means. |
+| **Decomposition** | How often are issues split? Inspect child counts, depth and long-running unsplit work. |
+| **Time in status** | Which open issues exceed the completed average for their current status, measured from first entry? |
+| **Estimates** | How do estimates relate to delivery time? Bubble area shows frequency; ordinal sizes stay ordinal. |
+
+<details>
+<summary><strong>Lead-time distribution and rolling median</strong></summary>
+
+![Synthetic lead-time distribution, rolling median and comparison table.](docs/screenshots/lead-time.png)
+
+</details>
+
+<details>
+<summary><strong>Cumulative flow by board column and status</strong></summary>
+
+![Synthetic cumulative flow diagrams showing issue counts at each workflow stage.](docs/screenshots/cfd.png)
+
+</details>
+
+Screenshots use the real template and fictional histories from [examples/demo.py](examples/demo.py).
+No customer data is used.
+
+## Try the demo
+
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/) and Git.
+The package requires Python 3.12+; `uv` uses the development version pinned in `.python-version`.
+
+```sh
+git clone https://github.com/letya999/jira-flow-report.git
+cd jira-flow-report
 uv sync --locked
-# Для нового подключения: скопировать пример и заполнить локально.
-if (!(Test-Path .env)) { Copy-Item .env.example .env }
-if (!(Test-Path configs/local.yaml)) { Copy-Item configs/example.yaml configs/local.yaml }
-# Fill .env and configs/local.yaml with your own Jira settings before running.
-git config core.hooksPath .githooks
-uv run --locked jira-flow run --config configs/local.yaml
+uv run --locked python examples/demo.py
 ```
 
-Переменные процесса имеют приоритет над `.env`. Другой файл можно выбрать через `--env-file`.
-Креды не принимаются в YAML и не экспортируются в результаты.
+The command prints an `output` directory. Open its `report.html` directly in your browser.
+No Jira account, token or `.env` is needed. The demo generates 96 fictional issues across four people
+and uses the same calculation and rendering code as a live report.
 
-## Настройки
+For a local viewer, replace the directory below with the printed path:
 
-`configs/example.yaml` — обезличенный пример с английскими комментариями и вымышленными ID.
-Скопируйте его в отдельный файл для каждой команды или человека и замените настройки своими.
-Все файлы в `configs/`, кроме `example.yaml`, игнорируются Git; существующие локальные файлы сохраняются.
-Состав команды задаётся только `assignee_ids`; пустой список означает всех исполнителей проекта.
-
-Поля задаются ID из Jira API: `customfield_10001`, `customfield_10002`, `assignee`.
-Последнее — канонический ID системного поля, а не отображаемое название.
-Статусы, типы задач, пользователи и варианты оценки тоже выбираются по ID.
-Названия в `label` используются только для отображения. Порядок колонок берётся из YAML.
-
-### YAML плюс параметры
-
-```powershell
-uv run --locked jira-flow run --config configs/local.yaml `
-  --set period.end=2026-04-02T00:00:00+00:00 `
-  --set metrics.lead_time.rolling_weeks=6
-```
-
-Любой ключ можно передать через повторяемый `--set dotted.path=value`.
-Значения JSON читаются как числа, boolean, null, списки или объекты; остальные значения — строки.
-Для числовых ID используйте JSON-строки, а не числа. Списки заменяются целиком;
-объекты объединяются с существующими настройками. `columns` целиком заменяет маппинг.
-Неизвестные ключи, неопределённые границы и некорректные ID вызывают ошибку.
-
-Приоритет: встроенные технические defaults → YAML → CLI → единая проверка.
-YAML не запускает shell-команды; он описывает параметры запуска.
-
-Пути из YAML разрешаются относительно его файла; `output_root`, переданный через CLI,
-разрешается относительно текущего каталога.
-
-### Запуск без YAML
-
-`--config` необязателен. Передайте обязательные настройки через `--set`:
-проект, типы задач, три ID полей, период, маппинг колонок, границы lead time и область оценки.
-Сложные значения передаются целым JSON-объектом/списком; применяется тот же валидатор.
-Практичнее сначала вывести проверенный контракт:
-
-```powershell
-uv run --locked jira-flow config --config configs/local.yaml
-```
-
-Полный пример запуска без файла из Python:
-
-```python
-from jira_flow.config import load_config
-from jira_flow.report import run_report
-
-settings = load_config("configs/local.yaml")
-# settings можно получить из своей системы; YAML для run_report уже не нужен.
-settings["period"]["end"] = "2026-04-02T00:00:00+00:00"
-directory = run_report(overrides=settings)
-```
-
-Прямой вариант `python -m jira_flow` также доступен через `uv run --locked python -m jira_flow`.
-
-## Результат: одна папка, пять файлов
-
-```text
-output/DEMO-20260402T120000.000000Z/
-  issues.csv
-  issues.json
-  config_DEMO_20260402T120000.000000Z.yaml
-  report.html
-  metrics.json
-```
-
-В имени — ключ проекта и время запуска UTC. Каждый запуск создаёт новую папку;
-публикация выполняется после успешного формирования всех пяти файлов.
-
-- `issues.json`: задачи и полные истории статусов/настроенных полей; параметры покрытия выгрузки.
-- `issues.csv`: одна строка на задачу, даты, состояния, выбранные поля и истории в JSON-ячейках.
-- `config_*.yaml`: применённый конфиг после CLI-переопределений, без секретов.
-- `metrics.json`: метрики, выборки, исключения, проверки баланса и контрольные суммы.
-- `report.html`: автономный отчёт с семью разделами и девятью графиками.
-
-Время `updated_at` и `current_status` — фактические текущие значения Jira при выгрузке.
-`change_timestamps` содержит даты всех групп изменений, включая поля, не используемые метриками.
-Счётчик изменявшихся за период задач учитывает создание, `updated_at` внутри периода
-или событие полной истории внутри периода. После конца периода Jira могла обновиться снова;
-такие задачи сохраняются в счётчике по истории. Изменения, которые Jira не записывает
-в changelog, задним числом восстановить нельзя.
-`status_at_period_end`, исполнитель и приоритет восстановлены на исторический срез.
-
-### Время в статусе
-
-Возраст текущей задачи = конец периода минус **первый** подтверждённый вход в статус.
-Порог = среднее по завершённым диапазонам «первый вход — последний выход», последний
-выход которых попал в период. Задачи, остающиеся в статусе, из порога исключаются.
-Возвраты не обнуляют возраст; время между заходами в других статусах входит в диапазон.
-`current_visit_days` в JSON сохраняет текущий непрерывный заход для проверки различий.
-Вычисления сохраняют полную точность; HTML округляет дни до трёх знаков.
-0,001 дня — 86,4 секунды, поэтому задачи после массового перехода могут иметь одинаковый
-отображаемый возраст. В разделе 5.2 показана дата первого входа, при наведении на возраст —
-значение с большей точностью. Среднее и отношение к нему вычисляются до округления;
-среднее является общим порогом статуса, а не индивидуальной метрикой задачи.
-Если завершённых диапазонов нет, порог не придумывается. Done из конфига и статусы
-с категорией Jira Done исключаются. Статусы идут справа налево по конфигу.
-Отображаются только статусы с превышениями, до четырёх самых старых задач на каждый.
-Все превышения и исходные истории сохраняются в `metrics.json` и `issues.json`.
-В таблице 4.2 отображаются только ID статусов, перечисленные в конфиге; исторические
-статусы остаются в данных и CFD, чтобы не потерять учёт задач и времени.
-
-### Проверка цветов
-
-Палитра рассчитывается детерминированно на Python и проверяется до выпуска HTML:
-расстояние CIE Delta E76 между всеми парами >= 20, между соседними видимыми слоями
-за весь CFD >= 30. Проверяются фактические соседи, включая исчезающие слои и возвраты из Done.
-Контраст каждого цвета с белыми границами >= 3:1; контраст подписей >= 4.5:1.
-Контраст непосредственно между заливками сохраняется как диагностическое измерение;
-это не обещание контраста 3:1 между всеми цветами. Для разделения используются белые границы.
-Пороги цветовых расстояний — инженерные критерии проекта, не стандарт доступности.
-Измерения и цвета сохраняются в `metrics.json.chart_colours`; нарушение порога останавливает сборку.
-
-### Сравнение групп и вклад колонок
-
-Lead time сгруппирован по людям, приоритетам и типам задач. `median_to_overall` — медиана
-группы / медиана всех задач, `median_to_mean` — медиана / среднее той же группы.
-При отсутствующем или нулевом знаменателе отношение пустое. Медиана и среднее группы
-сравниваются с соответствующими общими метриками. В Aging среднее человека сравнивается
-со средним команды в той же строке. Значения <= 75% подсвечиваются светло-зелёным,
-значения >= 125% — светло-красным. Отношение медианы к собственному среднему не окрашивается.
-
-`flow_breakdown` использует те же средние и количества наблюдений, что и таблица Aging 4.1.
-Колонки идут по конфигу, без Done и диагностической группы «Вне колонок».
-Ширина сегмента = среднее колонки / сумма известных средних отображаемых колонок.
-Отсутствующее среднее остаётся пустым, а не нулём. Полоска показывает соотношение средних
-по этапам; их сумма не является общим сроком задачи, поскольку выборки у колонок разные
-и диапазоны первого входа / последнего выхода могут перекрываться. Done скрыт также
-в обеих таблицах Aging; исходные диагностические данные сохранены в JSON.
-
-`resolution_at` сохраняет исходную дату разрешения Jira; `closed_at` — последний вход в колонку,
-указанную как Done для CFD, если задача осталась там на срез. При повторном открытии он пуст.
-`last_done_at` сохраняет последний вход в эту колонку независимо от текущего состояния.
-
-`issues.json` — источник для повторных расчётов. CSV экранирует потенциальные формулы таблиц;
-исходные значения остаются в JSON. Истории сериализуются в CSV без усечения.
-
-## Повторная сборка без Jira
-
-```powershell
-uv run --locked jira-flow build --config configs/local.yaml `
-  --input output/DEMO-<timestamp>/issues.json
-```
-
-Команда не читает `.env` и не обращается к API. Можно менять визуальные группировки, границы
-метрик, область оценок и сужать состав команды. Замена даты среза, расширение набора полей,
-типов задач или исполнителей требует новой выгрузки: старый JSON не выдаётся за полную новую выборку.
-
-## Правила расчётов
-
-- Период `[start, end)`. Даты содержат явный UTC offset. Неделя начинается в понедельник
-  в `period.timezone`; фактические длительности рассчитываются по UTC.
-- Выборка включает старые неизменявшиеся задачи: они нужны для начального CFD.
-  Поиск также захватывает кандидатов, которые после среза могли сменить исполнителя.
-- Принадлежность проекту и тип задачи берутся из текущих полей Jira. Исторические переносы
-  между проектами или смены типа не восстанавливаются.
-- Пропускная способность: уникальные задачи за неделю при входе в настроенный конечный этап.
-  Если задан старт, нужен предшествующий вход в него. Повторное закрытие в другой неделе
-  учитывается в ней снова; среднее — только по полным неделям, включая нули.
-- Lead time: настраиваемые первый/последний старт и первый/последний последующий конечный вход.
-  Выбранное завершение должно попадать в период. `require_end_state` исключает снова открытые задачи.
-- CFD: точные ступенчатые изменения, а не дневные срезы. На графике Done сдвинут к нулю;
-  в таблице среднего запаса он абсолютный. Возвраты могут давать отрицательное изменение Done.
-- Aging: `first_entry_to_last_exit` включает промежутки между повторными заходами;
-  `sum_visits` складывает только непосредственные пребывания. Учитывается последний выход
-  в периоде; открытое прохождение исключено из завершённого среднего.
-- Старые статусы без ID сохраняются отдельно по точному историческому имени. Название
-  `DEVELOPMENT` не становится автоматически настроенной «Разработкой». Неоднозначные
-  переименования помечаются; затронутые диапазоны статусов исключаются из Aging.
-
-## Точность оценок и частотность
-
-По X — **полный настроенный lead time**, по Y — **оценка по возрастанию**.
-Площадь точки пропорциональна количеству задач в одной категории и одном интервале X;
-ширина интервала задана `frequency_bin_days`. Позиция по X — центр интервала, а не среднее
-по категории. Подсказка содержит точные границы, количество и ключи задач.
-
-Оценка замораживается перед первым входом в `scope_columns`. Если её установили позже,
-она не считается исходной. Несколько одновременно выбранных размеров исключаются.
-Факт для сравнения с временной оценкой — сумма всех пребываний в этих колонках до завершения;
-паузы вне области оценки не включены. Это отдельная величина от полного lead time по X.
-
-В примере выбран порядок вариантов XS → S → M → L → XL, по ID опций.
-Для ordinal/story_points нет перевода в часы и процента временной ошибки.
-Для seconds/hours/days доступны факт/оценка и число превышений; нулевые и открытые оценки
-не используются как знаменатель. В `working` учитывается заданное расписание и праздники;
-день соответствует длительности рабочего интервала. В `calendar` день — 24 часа.
-
-Числовое поле не требует `options`. Для оценки из select-поля задайте ID вариантов и числовые
-`value`. Например, поле `customfield_10003` может использовать ID `201`…`206` со значениями
-0.5, 1, 2, 3, 4, 5 дней. Для варианта «5 и больше» задайте `open_ended: true`:
-он показывается на диаграмме, но точное отношение факта к этой оценке не рассчитывается.
-
-## Глубина декомпозиции
-
-Раздел 5 считает задачи, изменявшиеся в периоде, и все незавершённые задачи на срез.
-Старые закрытые задачи, нужные только для начального запаса CFD, в знаменатель не входят.
-Среднее число непосредственных детей включает нули; отдельно показано среднее среди задач
-с детьми. Глубина — длина самого длинного пути ниже задачи (0 — нет детей).
-
-Дети определяются по `parent`/`subtasks` и ID направленных связей разбиения из
-`metrics.decomposition.split_link_type_ids`. Обычные связи `Blocks`/`Relates` не считаются.
-Собственный эпик-родитель задачи не означает, что у неё есть дети. Дубли связей не удваивают
-число детей. Потомки других исполнителей, подзадачи и эпики используются как структурные
-данные; в основные метрики потока они не добавляются.
-
-История родительских связей загружается для всего доступного проекта без фильтра полей:
-старые записи `IssueParentAssociation`/`Link` не возвращаются фильтром `parent`/`issuelinks`.
-Даты создания и изменения родителей восстанавливают дерево на срез.
-Отсутствующие дети и циклы исключаются из средних и проверки отсутствия декомпозиции.
-Удалённые или скрытые от API задачи восстановить нельзя; переименованные типы связей без
-исторического ID могут ограничивать восстановление старых связей разбиения.
-
-В открытые кандидаты попадает задача без детей, чей возраст с первого входа в текущий статус
-выше среднего завершённого диапазона этого статуса. Это признак долгого срока, включая ожидание,
-а не доказательство большого объёма работы. Все длительности показаны в календарных днях.
-Структура включена в `issues.json`, показатели — в `metrics.json` и `issues.csv`;
-пересборка не требует Jira. Старые выгрузки без структуры показывают отсутствие данных.
-
-## Локальный просмотр
-
-```powershell
+```sh
 uv run --locked jira-flow serve --directory output/DEMO-<timestamp> --port 0
 ```
 
-`0` выбирает свободный порт. Сервер доступен только на `127.0.0.1`.
-Для передачи отчёта достаточно `report.html`; остальные файлы нужны для проверки и пересчёта.
-HTML и выгрузки содержат внутренние данные задач и исполнителей.
-Встроенный шрифт Noto Sans сопровождается лицензией `src/jira_flow/assets/OFL-Noto-Sans.txt`;
-её текст также включён в стили автономного HTML.
+The viewer prints a free `127.0.0.1` URL. Stop it with Ctrl+C.
 
-## Проверки
+## Connect your Jira
+
+### 1. Create local settings
+
+Copy the examples once; keep any existing local files.
+
+```sh
+cp .env.example .env
+cp configs/example.yaml configs/local.yaml
+```
+
+<details>
+<summary>PowerShell</summary>
 
 ```powershell
+if (!(Test-Path .env)) { Copy-Item .env.example .env }
+if (!(Test-Path configs/local.yaml)) { Copy-Item configs/example.yaml configs/local.yaml }
+```
+
+</details>
+
+Set `JIRA_BASE_URL`, `JIRA_EMAIL` and `JIRA_API_TOKEN` in `.env` or process variables.
+Use a Jira Cloud account with read access to the project and its histories.
+Process variables take precedence; choose another file with `--env-file`.
+The extractor reads Jira data and does not modify issues.
+
+### 2. Map your actual workflow
+
+The example contains **synthetic IDs**. Replace the project key, issue type IDs, field IDs,
+status-to-column mapping, metric boundaries and period before contacting Jira.
+Use Jira IDs, not translated field or status names.
+
+```yaml
+assignee_ids: []  # All assignees; use Jira account IDs to select a team/person.
+jira:
+  project_key: DEMO
+  issue_type_ids: ["1", "2", "3"]  # Replace with your Story/Task/Bug IDs.
+  board_id: null
+fields:
+  priority_id: customfield_10001
+  assignee_id: assignee
+  estimate_id: customfield_10002
+period:
+  start: "2026-01-01T00:00:00+00:00"
+  end: "2026-04-01T00:00:00+00:00"
+  timezone: UTC
+```
+
+This is an excerpt: keep the column and metric sections from [configs/example.yaml](configs/example.yaml).
+English comments explain every setting. Only selected issue types enter flow metrics;
+other types may be retrieved as hierarchy records to establish decomposition.
+
+### 3. Generate the report
+
+```sh
+uv run --locked jira-flow config --config configs/local.yaml
+uv run --locked jira-flow run --config configs/local.yaml
+```
+
+`config` validates and prints settings without contacting Jira. `run` fetches data and prints a JSON
+summary with the output directory and sample counts. Large projects can take time: CFD needs
+initial inventory, and decomposition needs project-wide hierarchy records.
+
+## Configuration
+
+Keep one local YAML per team or person and select it with `--config`.
+An empty `assignee_ids` includes everyone; otherwise selection uses account IDs at the period end.
+Only `configs/example.yaml` is tracked. Concrete configs and report runs stay local.
+
+| Setting | Controls |
+| --- | --- |
+| `jira`, `assignee_ids` | Project, issue types, optional board validation and people. |
+| `fields` | Priority, assignee and estimate field IDs; `assignee` is a canonical system field ID. |
+| `period` | Inclusive start, exclusive end and time zone for weekly boundaries. |
+| `columns` | Ordered columns and their status IDs. Labels only change displayed text. |
+| `metrics.throughput`, `metrics.lead_time` | Independent start/end boundaries and lead-time event rules. |
+| `metrics.aging`, `metrics.cfd` | Duration method and Done column to shift to zero on charts. |
+| `metrics.decomposition` | Split-link type IDs in addition to parent/child relations. |
+| `metrics.estimate_accuracy` | Units/options, covered columns, frequency bins and working calendar. |
+
+Override settings without editing YAML:
+
+```sh
+uv run --locked jira-flow run --config configs/local.yaml --set metrics.lead_time.rolling_weeks=6
+```
+
+Repeat `--set dotted.path=value`. JSON values support lists, objects, numbers, booleans and null.
+IDs remain strings. Lists replace the previous list; `columns` replaces the entire mapping.
+Unknown settings, duplicate status mappings and timestamps without offsets are rejected.
+YAML paths are relative to the file; CLI paths are relative to the current directory.
+YAML is optional if `--set` supplies all required values. Python callers can use `load_config()`
+and `run_report()` from `jira_flow.config` and `jira_flow.report`.
+
+## What a run produces
+
+```text
+output/DEMO-<UTC timestamp>/
+├── report.html                   # Self-contained dashboard
+├── issues.json                   # Issues, histories and hierarchy
+├── issues.csv                    # One issue per row, with serialized histories
+├── metrics.json                  # Metrics, cohorts, exclusions and validation
+└── config_DEMO_<timestamp>.yaml   # Effective settings, without credentials
+```
+
+Send `report.html` to recipients authorized to see its data. Keep the other files for audit and
+recalculation. Each run creates a new directory; a failed build does not publish a partial report.
+
+Rebuild from a snapshot without Jira:
+
+```sh
+uv run --locked jira-flow build --config configs/local.yaml --input output/DEMO-<timestamp>/issues.json
+```
+
+The snapshot must cover the requested project, types, people and fields. Changing the period end
+requires a fresh extraction: exported membership is fixed at that cutoff.
+
+## Read the numbers correctly
+
+- Metrics reconstruct state at the selected cutoff. Reopenings and pre-period history matter.
+- Throughput counts each issue once per local week; a later-week reclosure can count again.
+- Lead time follows configured events; it is not automatically a sum of time in selected columns.
+- Open issues are excluded from completed Aging means and compared against them separately.
+- Estimates are frozen before their scope starts. T-shirt sizes and story points are never converted to hours.
+- Person groups describe assigned issues, not individual effort or productivity.
+- Missing starts, restricted children and unresolved histories remain exclusions or unknowns, never invented zeros.
+
+See [metric definitions](docs/metrics.md) for formulas, cohorts and checks.
+The HTML is currently Russian-only. Jira Server/Data Center and alternative authentication methods
+have not been verified; live extraction targets Jira Cloud.
+
+## Develop and contribute
+
+```sh
+git config core.hooksPath .githooks
 uv run --locked pytest
-uv run --locked ruff check src tests
+uv run --locked ruff check src tests examples .githooks .repo-safety/scripts
 uv build
 ```
 
-Тесты проверяют возвраты, точные границы, исторического исполнителя, изменение оценки после
-старта, sum-visits против диапазона, порядок/частотность оценок, рабочие часы, эквивалентность
-конфига и параметров, пять выходных файлов и точное воспроизведение из JSON.
+Tests and the demo use synthetic histories. CI checks Linux and Windows without Jira secrets or report uploads.
+`main` is the only permanent branch; commits use `type(scope): description`. Coauthor trailers are prohibited.
+See [CONTRIBUTING](CONTRIBUTING.md) and [agent rules](AGENTS.md).
 
-## Публикация и работа с Git
+## Privacy and license
 
-Единственная постоянная ветка — `main`. Коммит: `тип(область): описание`, область необязательна.
-Типы: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`, `perf`. Один коммит — одно логическое изменение.
-Соавторство и строки `Co-authored-by` запрещены; автор — настроенный пользователь Git.
-Хук `commit-msg` проверяет формат и отсутствие соавторов, `pre-commit` запрещает приватные пути
-даже при принудительном добавлении через `git add -f`. Установить после клонирования:
+Real configs, caches, exports and reports contain internal data and are excluded from Git.
+A report without an API token can still contain sensitive information. See [SECURITY](SECURITY.md).
 
-```powershell
-git config core.hooksPath .githooks
-```
-
-В Git и пакеты входят исходники, тесты, документация и синтетический пример настроек.
-Конкретные конфиги, `.env`, `.cache/`, `output/` и сборки `dist/` остаются локальными.
-HTML содержит имена, описания и историю задач; отсутствие API-токена не делает отчёт публичным.
-Перед публикацией проверяйте состав коммита и историю: `.gitignore` не удаляет старые данные из Git.
+Code and documentation: [MIT](LICENSE). Embedded Noto Sans: [SIL Open Font License 1.1](src/jira_flow/assets/OFL-Noto-Sans.txt),
+also included in generated HTML. Independent community project; not affiliated with Atlassian.

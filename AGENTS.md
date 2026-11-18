@@ -6,7 +6,7 @@
 - `uv run --locked jira-flow build --config configs/local.yaml --input <run>/issues.json`
 - `uv run --locked jira-flow serve --directory <run> --port 0`
 - `uv run --locked pytest`
-- `uv run --locked ruff check src tests`
+- `uv run --locked ruff check src tests examples .githooks .repo-safety/scripts`
 
 ## Contract
 - One YAML per team; only `assignee_ids`, no team ID or display label.
@@ -84,3 +84,10 @@
 - Keep concrete team/person configs, `.env`, caches and all report runs out of Git and distributions.
 - Public tests and documentation must contain only synthetic task/person data.
 - Before committing: run tests and Ruff, inspect staged paths and scan the public files for secrets.
+
+## Documentation and demo
+- Keep `README.md` in English and `README.ru.md` in Russian, with equivalent setup and scope.
+- `examples/demo.py` must remain deterministic and contain only fictional data; it never contacts Jira.
+- README screenshots must be captured from that demo using the packaged report template.
+- Preserve MIT notices and the separate Noto Sans OFL notice, including embedded HTML styles.
+- CI runs offline tests, demo generation and packaging on Linux/Windows; never add Jira secrets or real report artifacts.
