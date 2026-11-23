@@ -9,9 +9,12 @@
 - `uv run --locked ruff check src tests examples .githooks .repo-safety/scripts`
 
 ## Contract
-- One YAML per team; only `assignee_ids`, no team ID or display label.
+- One YAML per team. Select via `assignee_ids`. Optional `people_merge` groups aliases by account ID.
 - YAML and repeated `--set path=value` arguments feed the same configuration validator.
-- Jira field and status matching uses IDs. Names are display metadata only.
+- Jira fields and current statuses match by ID. Columns use stable report ID keys and display names.
+- Current status objects require id/name; each may list legacy objects with id, name, or both.
+- Legacy names match exactly only for blank source IDs, or resolve to one ID in the project catalog.
+- Reject conflicting aliases and ambiguous catalog names; never override a present, unmatched source ID by name.
 - System field IDs such as `assignee` are IDs, not translated labels.
 - Keep credentials in `.env` or environment variables; never print or export them.
 - Each output directory is `<project_key>-<UTC timestamp>` and contains exactly:
@@ -24,12 +27,15 @@
 - Reconstruct assignee, priority and status at the exclusive period end.
 - Keep complete status histories, including pre-period events and post-cutoff events needed for rollback.
 - Do not select only recently updated issues: CFD needs the initial population.
-- Preserve blank-ID historical statuses by name. Do not guess aliases to configured IDs.
+- Preserve original status histories. Apply only explicitly configured historical equivalences before time calculations.
+- Keep resolution provenance in issues.json/CSV and the selected lead start source in metrics.json/CSV.
+- Moves between historical variants of one current status do not start new visits or reset ages.
 - Missing history, ambiguous renames, absent starts and missing estimates must be visible as exclusions.
 - Throughput is distinct issue keys per local Monday-based week; full-week average includes zeros.
 - Lead boundaries are configurable. Default: first development entry to last Done entry, still Done at cutoff.
 - CFD uses exact right-continuous event-time steps and time-weighted occupancy. Shift only Done on plots.
-- Aging first-entry/last-exit spans include intervening visits elsewhere; sums of visits do not.
+- Lead and Aging support weekdays or calendar time, with 24 hours per day. Default to weekdays.
+- Aging and time in status sum actual visits. Time outside the stage contributes zero.
 - Estimate values are frozen before the first entry into their configured scope.
 - Validate field chains only for changes being rolled back; pre-cutoff option IDs may have
   been remapped by Jira imports without a recorded field change. Do not invent an alias.
@@ -43,18 +49,19 @@
   at creation, config/CLI equivalence, missing estimates, ordinal ordering and frequency conservation.
 - Rebuild from exported issues without Jira and compare numerical metrics.
 - Verify seven sections, nine requested charts, offline fonts/scripts and no page overflow in a real browser.
-- Status-time alerts compare age since first entry with completed first-entry/last-exit spans ending in the period.
+- Status time shows current issues ranked by the sum of visits to that status, without a threshold.
   Exclude configured Done and statuses in Jira's Done category; never silently classify unknown legacy names.
 - Preserve timestamps of all changelog groups for the period-update counter, including unrelated fields.
-- Status-time display follows columns/statuses right to left in config order; show at most four oldest
-  above-mean tasks per status. Unmapped historical statuses follow mapped statuses without guessing order.
+- Status-time display follows columns/statuses right to left in config order; show at most four tasks per status
+  by actual time in that status. Unmapped historical statuses follow mapped statuses without guessing order.
 - The Aging strip reuses the exact column means/counts from table 4.1 in board order, excluding Done
   and outside-column diagnostics. Width = column mean / sum of displayed known means.
   Missing means stay null. The sum of independent stage means is not a task's total elapsed time.
 - Lead comparison ratios are median/group mean and median/pooled overall median; absent or zero bases yield null.
 - Show light green at <= 75% and light red at >= 125% of the matching team statistic; no low-sample badges.
 - Detailed lead exclusions stay in metrics.json; avoid duplicating diagnostic key lists in the report.
-- Do not render statuses with no above-mean tasks in section 6. Section 4.2 shows configured status IDs only;
+- Show lead sample coverage and reasons per group; historical start counts distinguish restored starts from absent starts.
+- Section 6 shows statuses with open tasks. Section 4.2 shows configured status IDs only;
   retain historical status data in exported JSON and CFD for population accounting.
 - Validate chart palettes at build time: all-pair Delta E76 >= 20, actual adjacent layers >= 30,
   contrast with white boundaries >= 3 and label text >= 4.5. Use checked colours in every CFD and flow strip.
@@ -68,7 +75,7 @@
   Count parent-child relations and configured split link type IDs, deduplicate children and detect cycles.
   Restore parent/link changes and child creation times at cutoff.
   Old Link/IssueParentAssociation events have no fieldId: hierarchy needs unfiltered changelogs.
-  Compare open first-status-entry age with that status's completed mean. Do not add closed-task warnings.
+  Compare open cumulative time in the current status with that status's completed mean. Do not add closed-task warnings.
   Missing/restricted children and cycles are unknown, never evidence of no decomposition.
 - Use synthetic fixtures for numerical regression; tests must not depend on private configs, Jira or local reports.
 

@@ -20,6 +20,7 @@ def config(tmp_path):
                     "development": {"label": "Work", "status_ids": ["2", "5"]},
                     "review": {"label": "Review", "status_ids": ["3"]},
                     "done": {"label": "Done", "status_ids": ["4"]}},
+        "metrics.lead_time.time_basis": "calendar", "metrics.aging.time_basis": "calendar",
         "metrics.lead_time.start.id": "2", "metrics.lead_time.end.id": "4",
         "metrics.decomposition.split_link_type_ids": [],
         "metrics.estimate_accuracy.options": [{"id": "10", "label": "S"}, {"id": "20", "label": "M"}],

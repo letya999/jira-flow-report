@@ -17,7 +17,7 @@ from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 
-from .config import instant
+from .config import instant, metric_status_ids, selected_assignee_ids, status_definitions
 from .decomposition import export_hierarchy
 
 
@@ -157,6 +157,30 @@ class JiraClient:
             if not values or offset > total or page.get("isLast"):
                 raise ValueError("Incomplete changelog: " + issue_id)
 
+    def status_catalog(self, project_id, project_statuses):
+        """Include unused statuses when the caller has access to the project catalog."""
+        rows, offset, total = [], 0, None
+        while True:
+            try:
+                page = self.get("/rest/api/3/statuses/search", {"projectId": project_id,
+                                "includeGlobalStatuses": "true", "startAt": offset, "maxResults": 100})
+            except RuntimeError as exc:
+                if offset or not any(code in str(exc) for code in ("HTTP 403:", "HTTP 404:")):
+                    raise
+                available = {s["id"]: s for row in project_statuses for s in row["statuses"]}
+                return list(available.values()), False
+            if page["startAt"] != offset or (total is not None and total != page["total"]):
+                raise ValueError("Status catalog changed during pagination")
+            total = page["total"]
+            rows.extend(page["values"])
+            offset += len(page["values"])
+            if offset == total:
+                if len({s["id"] for s in rows}) != len(rows):
+                    raise ValueError("Duplicate status catalog ID")
+                return rows, True
+            if not page["values"] or offset > total or page.get("isLast"):
+                raise ValueError("Incomplete status catalog")
+
     def collect(self, issue, field_ids):
         if not str(issue["id"]).isdigit():
             raise ValueError("Jira issue IDs must be numeric")
@@ -242,10 +266,11 @@ class JiraClient:
         quote = json.dumps
         jql = ("project = " + quote(config["jira"]["project_key"]) + " AND issuetype in (" +
                ",".join(config["jira"]["issue_type_ids"]) + ") AND created < " + quote(upper))
-        if config["assignee_ids"]:
+        accounts = selected_assignee_ids(config)
+        if accounts:
             field = config["fields"]["assignee_id"]
             clause = "cf[" + field.removeprefix("customfield_") + "]" if field.startswith("customfield_") else field
-            jql += " AND (" + clause + " in (" + ",".join(map(quote, config["assignee_ids"])) + ") OR updated >= " + quote(cutoff) + ")"
+            jql += " AND (" + clause + " in (" + ",".join(map(quote, accounts)) + ") OR updated >= " + quote(cutoff) + ")"
         jql += " ORDER BY key ASC"
         field_ids = sorted(set(requested + ["summary", "status", "issuetype", "project", "created", "updated", "resolutiondate"]))
         issues, token, tokens = [], None, set()
@@ -272,14 +297,14 @@ class JiraClient:
                 if number % 50 == 0 or number == len(futures):
                     print(f"Complete histories: {number}/{len(futures)}", flush=True)
         project_statuses = self.get("/rest/api/3/project/" + config["jira"]["project_key"] + "/statuses")
+        catalog, catalog_complete = self.status_catalog(project["id"], project_statuses)
         status_ids = {str(s["id"]) for row in project_statuses for s in row["statuses"]}
+        status_ids.update(str(s["id"]) for s in catalog)
         status_ids.update(str(item[side]) for record in records for h in record["histories"]
                           for item in h["items"] if (item.get("fieldId") or item.get("field")) == "status"
                           for side in ("from", "to") if item.get(side))
-        configured = {s for column in config["columns"].values() for s in column["status_ids"]}
-        configured.update(boundary["id"] for metric in ("throughput", "lead_time")
-                          for boundary in (config["metrics"][metric]["start"], config["metrics"][metric]["end"])
-                          if boundary and boundary["type"] == "status")
+        configured = {s["id"] for s in status_definitions(config)}
+        configured.update(metric_status_ids(config))
         if configured-status_ids:
             raise ValueError("Unknown configured status IDs: " + ", ".join(sorted(configured-status_ids)))
         board = self.get(f"/rest/agile/1.0/board/{config['jira']['board_id']}/configuration") if config["jira"]["board_id"] else None
@@ -291,6 +316,7 @@ class JiraClient:
             "query": jql, "query_timezone": str(account_tz),
             "field_metadata": {key: fields[key] for key in requested},
             "board": board, "status_ids": sorted(status_ids),
+            "status_catalog": catalog, "status_catalog_complete": catalog_complete,
             "records": sorted(records, key=lambda r: int(r["issue"]["id"])),
         }
 

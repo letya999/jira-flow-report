@@ -8,7 +8,7 @@ from datetime import datetime, time, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
 
-from .config import instant
+from .config import assignee_aliases, instant, selected_assignee_ids, status_aliases, status_definitions
 
 UTC = timezone.utc
 OUTSIDE = "__outside__"
@@ -20,6 +20,23 @@ def seconds(left, right):
 
 def days(left, right):
     return seconds(left, right) / 86400
+
+
+def duration_days(left, right, basis, tz):
+    if basis == "calendar":
+        return days(left, right)
+    day = left.astimezone(tz).date()
+    stop = right.astimezone(tz).date()
+    left, right = left.astimezone(UTC), right.astimezone(UTC)
+    total = 0.0
+    while day <= stop:
+        tomorrow = day + timedelta(days=1)
+        if day.weekday() < 5:
+            begin = datetime.combine(day, time.min, tz).astimezone(UTC)
+            end = datetime.combine(tomorrow, time.min, tz).astimezone(UTC)
+            total += max(0, (min(right, end) - max(left, begin)).total_seconds())
+        day = tomorrow
+    return total / 86400
 
 
 def percentile(values, fraction):
@@ -111,26 +128,47 @@ def status_key(status_id, name):
     return "legacy:" + name.strip()
 
 
-def timeline(issue, end):
+def timeline(issue, end, aliases=None, labels=None):
+    aliases, labels = aliases or {}, labels or {}
     events = issue["status_history"]
     created = instant(issue["created_at"])
     current = issue["current_status"]
-    initial = status_key(events[0]["from"], events[0]["from_label"]) if events else str(current["id"])
-    names = {str(current["id"]): current["name"]}
+    first_id, first_name = (events[0]["from"], events[0]["from_label"]) if events else (current["id"], current["name"])
+    raw_initial = status_key(first_id, first_name)
+    initial = aliases.get(raw_initial, raw_initial)
+    current_key = status_key(current["id"], current["name"])
+    current_key = aliases.get(current_key, current_key)
+    names = {current_key: labels.get(current_key, current["name"])}
     state, cursor = initial, created
+    raw_state = raw_initial
     visits, changes, warnings, uncertain = [], [], [], set()
+    resolutions, legacy_instants = [], [created] if raw_initial.startswith("legacy:") else []
+
+    def source(at, raw_id, name, target, history_id=None):
+        raw = status_key(raw_id, name)
+        return {"at": at.isoformat(), "status_id": target, "source_id": raw_id or None, "source_name": name,
+                "matched_by": ("name" if raw.startswith("legacy:") else "id") if raw in aliases else None,
+                "history_id": history_id}
+
+    entries = [source(created, first_id, first_name, initial)]
     for event in events:
         when = instant(event["at"])
-        before = status_key(event["from"], event["from_label"])
-        after = status_key(event["to"], event["to_label"])
-        for key, label in ((before, event["from_label"]), (after, event["to_label"])):
-            names[key] = (label or key) + (" (старый)" if key.startswith("legacy:") else "")
         if when >= end:
             break
+        raw_before = status_key(event["from"], event["from_label"])
+        raw_after = status_key(event["to"], event["to_label"])
+        before, after = aliases.get(raw_before, raw_before), aliases.get(raw_after, raw_after)
+        for key, label in ((before, event["from_label"]), (after, event["to_label"])):
+            names[key] = labels.get(key, (label or key) + (" (старый)" if key.startswith("legacy:") else ""))
+        for side, raw, target in (("from", raw_before, before), ("to", raw_after, after)):
+            if raw.startswith("legacy:"):
+                legacy_instants.append(when)
+            if raw in aliases:
+                resolutions.append({**source(when, event[side], event[side+"_label"], target, event["history_id"]), "side": side})
         if when < cursor:
             raise ValueError("Non-monotonic status history: " + issue["key"])
         if before != state:
-            if not (before.startswith("legacy:") and state.startswith("legacy:")):
+            if not (raw_before.startswith("legacy:") and raw_state.startswith("legacy:")):
                 raise ValueError("Broken status chain: " + issue["key"])
             unknown = "legacy:__unconfirmed__"
             names[unknown] = "Исторический статус не подтверждён"
@@ -142,12 +180,15 @@ def timeline(issue, end):
             if cursor < when:
                 visits.append((cursor, when, state))
             changes.append((when, state, after))
+            entries.append(source(when, event["to"], event["to_label"], after, event["history_id"]))
             state, cursor = after, when
+        raw_state = raw_after
     if cursor < end:
         visits.append((cursor, end, state))
-    names.setdefault(initial, initial)
+    names.setdefault(initial, labels.get(initial, first_name or initial))
     return {"initial": initial, "current": state, "visits": visits, "changes": changes,
-            "names": names, "warnings": warnings, "uncertain": uncertain}
+            "names": names, "warnings": warnings, "uncertain": uncertain,
+            "entries": entries, "resolutions": resolutions, "legacy_instants": legacy_instants}
 
 
 def entries_for(t, created, match):
@@ -247,18 +288,24 @@ def calculate(issues, config, metadata=None):
     start, end = instant(config["period"]["start"]), instant(config["period"]["end"])
     tz = ZoneInfo(config["period"]["timezone"])
     columns = config["columns"]
-    mapping = {s: key for key, col in columns.items() for s in col["status_ids"]}
+    definitions = status_definitions(config)
+    aliases = status_aliases(config, metadata.get("status_catalog"))
+    configured_names = {s["id"]: s["name"] for s in definitions if s["name"] != s["id"]}
+    mapping = {s["id"]: key for key, col in columns.items() for s in col["statuses"]}
     col_keys = list(columns) + [OUTSIDE]
-    col_labels = {key: value["label"] for key, value in columns.items()} | {OUTSIDE: "Вне колонок"}
+    col_labels = {key: value["name"] for key, value in columns.items()} | {OUTSIDE: "Вне колонок"}
     people, types, priorities, names = {}, {}, {}, {}
     selected, tasks, timelines, all_visits, all_columns, warnings = [], [], {}, [], [], []
     leads, exclusions, deliveries = [], [], []
-    age_values, age_open = defaultdict(list), Counter()
+    age_values, age_open, active_status = defaultdict(list), Counter(), defaultdict(list)
     throughput = config["metrics"]["throughput"]
     lead_cfg = config["metrics"]["lead_time"]
     end_match = boundary_match(throughput["end"], mapping)
     begin_match = boundary_match(throughput["start"], mapping) if throughput["start"] else None
-    lead_start = boundary_match(lead_cfg["start"], mapping)
+    default_start = boundary_match(lead_cfg["start"], mapping)
+    starts_by_type = {type_id: set(ids) for type_id, ids in lead_cfg["start_by_type"].items()}
+    lead_basis, aging_basis = lead_cfg["time_basis"], config["metrics"]["aging"]["time_basis"]
+    account_aliases, accounts = assignee_aliases(config), set(selected_assignee_ids(config))
     lead_end = boundary_match(lead_cfg["end"], mapping)
     field_cfg = config["fields"]
     seen = set()
@@ -272,15 +319,17 @@ def calculate(issues, config, metadata=None):
         if any(k not in issue["field_values"] or k not in issue["field_history"] for k in field_cfg.values()):
             raise ValueError("Snapshot does not contain all configured fields: " + issue["key"])
         person, person_label = identity(value_before(issue, field_cfg["assignee_id"], end))
-        if config["assignee_ids"] and person not in config["assignee_ids"]:
+        if accounts and person not in accounts:
             continue
+        person, person_label = account_aliases.get(person, (person, person_label))
         priority, priority_label = identity(value_before(issue, field_cfg["priority_id"], end))
         people[person], priorities[priority] = person_label, priority_label
         types[issue["issue_type"]["id"]] = issue["issue_type"]["name"]
-        t = timeline(issue, end)
+        t = timeline(issue, end, aliases, configured_names)
         names.update(t["names"])
         warnings.extend(t["warnings"])
         timelines[issue["key"]] = t
+        issue["resolved_status_history"] = t["resolutions"]
         all_visits.append(t["visits"])
         column_visits = [(a, b, mapping.get(s, OUTSIDE)) for a, b, s in t["visits"]]
         all_columns.append(column_visits)
@@ -304,6 +353,8 @@ def calculate(issues, config, metadata=None):
                 "priority_id": priority, "priority": priority_label, "status": current,
                 "column": mapping.get(current, OUTSIDE), "created": created.isoformat()}
         tasks.append(task)
+        type_start_ids = starts_by_type.get(task["type_id"])
+        lead_start = type_start_ids.__contains__ if type_start_ids else default_start
         firsts, _ = entries_for(t, created, lead_start)
         lasts, _ = entries_for(t, created, lead_end)
         begin = (min(firsts) if lead_cfg["start_event"] == "first_entry" else max(firsts)) if firsts else None
@@ -322,7 +373,11 @@ def calculate(issues, config, metadata=None):
             elif lead_cfg["require_end_state"] and not lead_end(current):
                 reason = "reopened_unfinished"
             else:
-                leads.append({**task, "start": begin.isoformat(), "done": finish.isoformat(), "days": days(begin, finish)})
+                start_source = next(e for e in t["entries"] if instant(e["at"]) == begin and lead_start(e["status_id"]))
+                leads.append({**task, "start": begin.isoformat(), "done": finish.isoformat(),
+                              "days": duration_days(begin, finish, lead_basis, tz),
+                              "start_source": start_source,
+                              "legacy_before_start": any(at < begin for at in t["legacy_instants"])})
         if reason and (done_in_window or firsts):
             exclusions.append({"key": issue["key"], "reason": reason, "entered_throughput_end_in_period": bool(done_in_window)})
         for kind, keys, now in (("status", set(t["names"]), current), ("column", col_keys, task["column"])):
@@ -331,14 +386,18 @@ def calculate(issues, config, metadata=None):
                 arrivals, exits = entries_for(t, created, match)
                 if not arrivals:
                     continue
+                known = kind == "column" or key not in t["uncertain"]
+                completed = key != now and exits and start <= max(exits) < end
                 if key == now:
                     age_open[kind, key, person] += 1
-                elif exits and start <= max(exits) < end and not (kind == "status" and key in t["uncertain"]):
-                    if config["metrics"]["aging"]["method"] == "first_entry_to_last_exit":
-                        value = days(min(arrivals), max(exits))
+                if known and (completed or (kind == "status" and key == now)):
+                    value = sum(duration_days(a, b, aging_basis, tz) for a, b, s in t["visits"] if match(s))
+                    if completed:
+                        age_values[kind, key, person].append(value)
                     else:
-                        value = sum(days(a, b) for a, b, s in t["visits"] if match(s))
-                    age_values[kind, key, person].append(value)
+                        active_status[key].append({**task, "entered_at": min(arrivals).isoformat(), "days": value,
+                                                   "last_entered_at": max(arrivals).isoformat(),
+                                                   "current_visit_days": duration_days(max(arrivals), end, aging_basis, tz)})
 
     people = dict(sorted(people.items(), key=lambda p: p[1]))
     weeks = []
@@ -353,6 +412,7 @@ def calculate(issues, config, metadata=None):
         monday = stop
     full = [w["count"] for w in weeks if not w["partial"]]
     lookup = {t["key"]: t for t in tasks}
+    delivered_keys = {d["key"] for d in deliveries}
     groups = {}
     for dimension, labels in (("person", people), ("type", types), ("priority", priorities)):
         rows = []
@@ -360,6 +420,7 @@ def calculate(issues, config, metadata=None):
             counts = [sum(lookup[k][dimension+"_id"] == key for k in w["keys"]) for w in weeks]
             full_counts = [n for n, w in zip(counts, weeks) if not w["partial"]]
             rows.append({"id": key, "name": name, "weeks": counts,
+                         "unique": sum(lookup[k][dimension+"_id"] == key for k in delivered_keys),
                          "mean_full": statistics.mean(full_counts) if full_counts else None})
         if any(sum(g["weeks"][i] for g in rows) != w["count"] for i, w in enumerate(weeks)):
             raise ValueError("Throughput grouping failed")
@@ -383,7 +444,7 @@ def calculate(issues, config, metadata=None):
                          {key for kind, key, _ in age_values if kind == "status"},
                          key=lambda s: (0, list(mapping).index(s)) if s in mapping else (1, names.get(s, s)))
     done_column = config["metrics"]["cfd"]["done_column"]
-    done_statuses = columns[done_column]["status_ids"]
+    done_statuses = [s["id"] for s in columns[done_column]["statuses"]]
     cfd = {}
     for kind, visits, keys, labels, done_keys in (
         ("columns", all_columns, col_keys, col_labels, [done_column]),
@@ -413,29 +474,46 @@ def calculate(issues, config, metadata=None):
     for key in status_keys:
         if key in terminal:
             continue
-        completed, active = [], []
-        for task in tasks:
-            t = timelines[task["key"]]
-            if key in t["uncertain"]:
-                continue
-            arrivals, exits = entries_for(t, instant(task["created"]), lambda s, k=key: s == k)
-            if task["status"] != key and arrivals and exits and start <= max(exits) < end:
-                completed.append(days(min(arrivals), max(exits)))
-            if task["status"] == key and arrivals:
-                active.append({**task, "entered_at": min(arrivals).isoformat(), "days": days(min(arrivals), end),
-                               "last_entered_at": max(arrivals).isoformat(), "current_visit_days": days(max(arrivals), end)})
-        mean = statistics.mean(completed) if completed else None
-        above = sorted((a for a in active if mean is not None and a["days"] > mean), key=lambda a: -a["days"])
-        status_time.append({"key": key, "name": names.get(key, key), "mean": mean,
-                            "n": len(completed), "active": sorted(active, key=lambda a: -a["days"]),
-                            "above_mean": above, "terminal_category_known": key in metadata.get("status_categories", {})})
+        completed = [v for p in people for v in age_values["status", key, p]]
+        active = sorted(active_status[key], key=lambda a: (-a["days"], a["key"]))
+        status_time.append({"key": key, "name": names.get(key, key),
+                            "mean": statistics.mean(completed) if completed else None,
+                            "n": len(completed), "active": active, "top_tasks": active[:4],
+                            "terminal_category_known": key in metadata.get("status_categories", {})})
     board_statuses = list(mapping)
     status_time.sort(key=lambda row: (0, -board_statuses.index(row["key"])) if row["key"] in mapping
                      else (1, row["name"], row["key"]))
-    for row in status_time:
-        row["above_mean_count"] = len(row["above_mean"])
-        row["top_tasks"] = row["above_mean"][:4]
     lead_stats = stats([lead["days"] for lead in leads])
+    lead_keys = {lead["key"] for lead in leads}
+    legacy_lead_keys = {lead["key"] for lead in leads if lead["legacy_before_start"]}
+    historical_starts = {lead["key"] for lead in leads if lead["start_source"]["matched_by"] is not None}
+    exclusion_reasons = {row["key"]: row["reason"] for row in exclusions}
+
+    def lead_coverage(keys):
+        completed, sampled = delivered_keys & keys, lead_keys & keys
+        missing = completed - sampled
+        if not missing <= exclusion_reasons.keys():
+            raise ValueError("Unexplained lead time exclusion")
+        return {"throughput_n": len(completed), "matched_n": len(completed & sampled),
+                "missing_n": len(missing), "lead_only_n": len(sampled - completed),
+                "legacy_before_start_n": len(sampled & legacy_lead_keys),
+                "historical_start_n": len(sampled & historical_starts),
+                "coverage": len(completed & sampled)/len(completed) if completed else None,
+                "exclusion_counts": dict(Counter(exclusion_reasons[key] for key in sorted(missing)))}
+
+    coverage = lead_coverage(set(lookup))
+    lead_groups = {}
+    for dimension, labels, name in (("person", people, "people"), ("priority", priorities, "priorities"), ("type", types, "types")):
+        rows = []
+        for key, label in labels.items():
+            keys = {t["key"] for t in tasks if t[dimension+"_id"] == key}
+            values = [lead["days"] for lead in leads if lead["key"] in keys]
+            rows.append({"id": key, "name": label, **lead_comparison(values, lead_stats["p50"]),
+                         "cohort": lead_coverage(keys)})
+        for counter in ("throughput_n", "matched_n", "missing_n", "lead_only_n", "legacy_before_start_n", "historical_start_n"):
+            if sum(row["cohort"][counter] for row in rows) != coverage[counter]:
+                raise ValueError("Lead time cohort grouping failed")
+        lead_groups[name] = rows
     aging_columns = age_rows("column", col_keys, col_labels)
     breakdown = calculate_breakdown(aging_columns, config)
     updated = []
@@ -451,15 +529,12 @@ def calculate(issues, config, metadata=None):
             "timezone": config["period"]["timezone"], "cohort_size": len(tasks), "tasks": tasks,
             "issue_types": [{"id": k, "name": v, "n": sum(t["type_id"] == k for t in tasks)} for k, v in sorted(types.items())],
             "updated_in_period": {"n": len(updated), "keys": sorted(updated), "incomplete_evidence": incomplete_update_evidence},
-            "status_time": status_time,
+            "status_time": status_time, "aging_time_basis": aging_basis,
             "people": [{"id": k, "name": v} for k, v in people.items()],
             "throughput": {"weeks": weeks, "groups": groups, "unique": len({d["key"] for d in deliveries}),
                            "events": len(deliveries), "weekly_sum": sum(w["count"] for w in weeks), "full_week_stats": stats(full)},
-            "lead": {"stats": lead_comparison([lead["days"] for lead in leads], lead_stats["p50"]), "tasks": leads, "weeks": lead_weeks,
-                     "histogram": histogram, "exclusions": exclusions,
-                     "people": [{"name": name, **lead_comparison([lead["days"] for lead in leads if lead["person_id"] == key], lead_stats["p50"])} for key, name in people.items()],
-                     "priorities": [{"name": name, **lead_comparison([lead["days"] for lead in leads if lead["priority_id"] == key], lead_stats["p50"])} for key, name in priorities.items()],
-                     "types": [{"name": name, **lead_comparison([lead["days"] for lead in leads if lead["type_id"] == key], lead_stats["p50"])} for key, name in types.items()]},
+            "lead": {"time_basis": lead_basis, "stats": lead_comparison([lead["days"] for lead in leads], lead_stats["p50"]), "tasks": leads, "weeks": lead_weeks,
+                     "histogram": histogram, "exclusions": exclusions, "cohort": coverage, **lead_groups},
             "cfd_columns": cfd["columns"], "cfd_statuses": cfd["statuses"],
             "mean_statuses": [{"name": cfd["statuses"]["labels"][i], "mean": mean,
                                "initial": cfd["statuses"]["points"][0]["counts"][i],
@@ -471,7 +546,7 @@ def calculate(issues, config, metadata=None):
             "aging_columns": aging_columns,
             "aging_statuses": age_rows("status", status_keys, names), "accuracy": accuracy,
             "warnings": warnings, "validation": {"weekly_groups_match": True, "cfd_population_matches": True, "histogram_matches": True,
-                                                   "flow_breakdown_matches": True}}
+                                                   "flow_breakdown_matches": True, "lead_cohorts_match": True}}
 
 
 def calculate_breakdown(aging_columns, config):
@@ -541,6 +616,6 @@ def calculate_accuracy(issues, timelines, leads, mapping, config):
     if sum(b["n"] for b in bubbles) != len(rows):
         raise ValueError("Estimate frequencies do not reconcile")
     return {"unit": cfg["unit"], "time_basis": cfg["time_basis"], "bin_days": cfg["frequency_bin_days"],
-            "scope_labels": [config["columns"][key]["label"] for key in cfg["scope_columns"]],
+            "scope_labels": [config["columns"][key]["name"] for key in cfg["scope_columns"]],
             "n": len(rows), "lead_n": len(leads), "tasks": rows, "bubbles": bubbles,
             "groups": summary, "exclusions": excluded, "exclusion_counts": dict(Counter(r["reason"] for r in excluded))}

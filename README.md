@@ -28,7 +28,7 @@ configuration comments and this guide are in English. There is no Node.js build 
 | **Cumulative flow (CFD)** | Where does work accumulate? Separate diagrams for board columns and Jira statuses. |
 | **Aging time** | How long do completed passages through each stage take? Compare people and stage means. |
 | **Decomposition** | How often are issues split? Inspect child counts, depth and long-running unsplit work. |
-| **Time in status** | Which open issues exceed the completed average for their current status, measured from first entry? |
+| **Time in status** | Which open issues spent the most time in their current status across visits? |
 | **Estimates** | How do estimates relate to delivery time? Bubble area shows frequency; ordinal sizes stay ordinal. |
 
 <details>
@@ -102,7 +102,8 @@ The extractor reads Jira data and does not modify issues.
 
 The example contains **synthetic IDs**. Replace the project key, issue type IDs, field IDs,
 status-to-column mapping, metric boundaries and period before contacting Jira.
-Use Jira IDs, not translated field or status names.
+Use Jira IDs for fields and current statuses. Current statuses also require a display name;
+explicit historical mappings can use an ID, an exact name, or both.
 
 ```yaml
 assignee_ids: []  # All assignees; use Jira account IDs to select a team/person.
@@ -138,7 +139,8 @@ initial inventory, and decomposition needs project-wide hierarchy records.
 ## Configuration
 
 Keep one local YAML per team or person and select it with `--config`.
-An empty `assignee_ids` includes everyone; otherwise selection uses account IDs at the period end.
+An empty `assignee_ids` includes everyone. Optional `people_merge` groups accounts for one person.
+Selecting any account in a group includes the whole group. The report restores the assignee at the period end first.
 Only `configs/example.yaml` is tracked. Concrete configs and report runs stay local.
 
 | Setting | Controls |
@@ -146,9 +148,9 @@ Only `configs/example.yaml` is tracked. Concrete configs and report runs stay lo
 | `jira`, `assignee_ids` | Project, issue types, optional board validation and people. |
 | `fields` | Priority, assignee and estimate field IDs; `assignee` is a canonical system field ID. |
 | `period` | Inclusive start, exclusive end and time zone for weekly boundaries. |
-| `columns` | Ordered columns and their status IDs. Labels only change displayed text. |
-| `metrics.throughput`, `metrics.lead_time` | Independent start/end boundaries and lead-time event rules. |
-| `metrics.aging`, `metrics.cfd` | Duration method and Done column to shift to zero on charts. |
+| `columns` | Stable column ID keys, names and named current statuses; optional `legacy` equivalents per status. |
+| `metrics.throughput`, `metrics.lead_time` | Independent boundaries and lead-time rules, including optional start statuses per issue type and time basis. |
+| `metrics.aging`, `metrics.cfd` | Duration time basis and Done column to shift to zero on charts. |
 | `metrics.decomposition` | Split-link type IDs in addition to parent/child relations. |
 | `metrics.estimate_accuracy` | Units/options, covered columns, frequency bins and working calendar. |
 
@@ -192,6 +194,7 @@ requires a fresh extraction: exported membership is fixed at that cutoff.
 
 - Metrics reconstruct state at the selected cutoff. Reopenings and pre-period history matter.
 - Throughput counts each issue once per local week; a later-week reclosure can count again.
+- Group tables show throughput completions, lead-time samples, coverage and exclusion reasons; Rejected is included only if configured.
 - Lead time follows configured events; it is not automatically a sum of time in selected columns.
 - Open issues are excluded from completed Aging means and compared against them separately.
 - Estimates are frozen before their scope starts. T-shirt sizes and story points are never converted to hours.

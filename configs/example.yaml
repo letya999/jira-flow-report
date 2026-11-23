@@ -1,8 +1,13 @@
 # Copy this file for another team. Replace project, field, issue type, option and status IDs.
 # All IDs and settings below are synthetic placeholders. Replace them before calling Jira.
-# One configuration per team. Match Jira entities by IDs, never display names.
+# One configuration per team. Current Jira entities match by ID.
 # Use [] to include all assignees; otherwise list Jira account IDs at the period end.
 assignee_ids: []
+
+# Optional: group Jira account IDs belonging to the same person.
+# The first ID identifies the group. Selecting any member includes the whole group.
+# Example: [{ids: ["account-a", "account-b"], name: "Example Person"}]
+people_merge: []
 
 jira:
   # Project key and allowed issue type IDs. Exclude epics and subtasks explicitly.
@@ -25,28 +30,49 @@ period:
   timezone: UTC
 
 columns:
-  # Stable local keys; labels are display-only. Each Jira status may occur once.
+  # Keys are stable report column IDs, not Jira column IDs. Order follows the board.
+  # Current statuses require their Jira ID and a display name.
+  # Each status may have multiple historical equivalents in legacy.
+  # A legacy item accepts id, name, or both. Name matching is exact and only applies
+  # when the changelog status ID is missing. A unique project catalog match also
+  # resolves a name-only legacy item to its ID. A present source ID takes priority.
+  # Names need not be unique for current statuses; legacy names must be unambiguous.
   todo:
-    label: TO DO
-    status_ids: ["1", "2"]
+    name: TO DO
+    statuses:
+      - {id: "1", name: Backlog}
+      - {id: "2", name: Ready}
   refinement:
-    label: REFINEMENT
-    status_ids: ["3"]
+    name: REFINEMENT
+    statuses:
+      - {id: "3", name: Refinement}
   development:
-    label: IN PROGRESS
-    status_ids: ["4", "5", "6"]
+    name: IN PROGRESS
+    statuses:
+      - id: "4"
+        name: Development
+        legacy:
+          - {id: "90", name: Former development}
+          - {name: Historical development without an ID}
+      - {id: "5", name: Stage}
+      - {id: "6", name: Testing}
   review:
-    label: REVIEW
-    status_ids: ["7"]
+    name: REVIEW
+    statuses:
+      - {id: "7", name: Code review}
   production:
-    label: PRODUCTION
-    status_ids: ["8", "9"]
+    name: PRODUCTION
+    statuses:
+      - {id: "8", name: Production}
+      - {id: "9", name: Production check}
   check:
-    label: CHECK
-    status_ids: ["10"]
+    name: CHECK
+    statuses:
+      - {id: "10", name: Check}
   done:
-    label: DONE
-    status_ids: ["11"]
+    name: DONE
+    statuses:
+      - {id: "11", name: Done}
 
 metrics:
   throughput:
@@ -56,6 +82,11 @@ metrics:
     end: {type: column, id: done}
 
   lead_time:
+    # working counts Monday to Friday, 24 hours per full weekday; calendar counts every day.
+    time_basis: working
+    # Optional: override the start per issue type ID with a list of current status IDs.
+    # Example: {"10001": ["10010", "10011"]}. Other types use the common start below.
+    start_by_type: {}
     start: {type: status, id: "4"}
     end: {type: status, id: "11"}
     # Allowed values for both events: first_entry or last_entry.
@@ -72,9 +103,8 @@ metrics:
     done_column: done
 
   aging:
-    # first_entry_to_last_exit includes time elsewhere between returns.
-    # sum_visits counts only time actually inside the status/column.
-    method: first_entry_to_last_exit
+    # Only actual visits to each stage are summed. This also sets the unit for time in status.
+    time_basis: working
 
   decomposition:
     # Parent/subtask relations always count. Replace with your split-into link type IDs.

@@ -15,6 +15,35 @@
   Exported metrics retain detailed exclusions; absence is not converted to zero.
 - Calculations retain full precision. The HTML rounds days to three decimals; 0.001 day is 86.4 seconds.
 
+## Workflow mapping
+
+Column keys are stable local report IDs, with a `name` for display. Each column's ordered
+`statuses` list contains current status objects with required Jira `id` and display `name`.
+Each status may include several `legacy` objects, each containing `id`, `name`, or both:
+
+```yaml
+columns:
+  development:
+    name: IN PROGRESS
+    statuses:
+      - id: "4"
+        name: Development
+        legacy:
+          - {id: "90", name: Former development}
+          - {name: Historical development without an ID}
+```
+
+These IDs and names are synthetic. An existing source ID takes priority. An exact configured
+legacy name matches a blank-ID history entry; a unique match in the saved project status
+catalog can also bind a name-only rule to an ID. Ambiguous names and conflicting mappings fail.
+Names are never searched across unrelated projects. Current names are display metadata.
+
+All metrics use the same mapped timeline. Moving between equivalents does not exit/re-enter
+the canonical status or reset age. Original `status_history` is retained; `resolved_status_history`
+records each applied mapping and `start_source` records the selected lead start with ID/name provenance.
+Unmapped statuses remain separate. Old column configurations with `label`/`status_ids` are upgraded
+when loaded; new exports use named status objects.
+
 ## Throughput
 
 For each local calendar week, count **distinct issue keys** entering the configured end stage in the window.
@@ -45,6 +74,21 @@ then takes their median; it is not an average of weekly medians.
 
 Missing or zero denominators produce no ratio. Lead time measures elapsed delivery time, not effort.
 Throughput and lead time may use different endpoints and cohorts; check configured boundaries.
+Every lead group includes a `cohort`: distinct throughput issues, issues shared with the lead sample,
+throughput issues without a lead duration and their exclusion reasons, and lead-only issues.
+Coverage is shared issues / distinct throughput issues; it is null when there are no throughput issues.
+HTML shows these counts and coverage next to each group's statistics. Means and percentiles use only
+the lead sample; incomplete coverage must not be read as the durations of all completed work.
+Group totals reconcile with the overall cohort during calculation, before HTML is generated.
+Lead tasks also flag `legacy_before_start` when a name-only historical status precedes the configured
+start. This history is retained, counted per group and disclosed in HTML; it is not silently
+aliased to a current status without an explicit configured equivalence.
+`historical_start_n` counts starts recovered through those equivalences, including tasks already
+in the old sample whose development started before the first current-status entry.
+Group tables show two counts: distinct issues entering the configured throughput end and issues
+with a calculable lead time. The duration statistics use the latter. The section shows how many
+throughput issues lack lead time and summarizes the exclusion reasons. A Jira Done-category
+status such as Rejected counts only if it belongs to the configured throughput end.
 
 ## Cumulative flow (CFD)
 
@@ -58,9 +102,15 @@ Historical unmapped statuses stay in exported data and CFD for population accoun
 
 ## Aging time and the stage strip
 
-The default completed-stage duration is **last exit − first entry**, including time elsewhere
-between returns. Its last exit must be in the window. Issues still in that stage at cutoff
-are excluded from its completed mean. The alternative `sum_visits` method sums only time inside.
+Completed-stage duration is **the sum of actual visits** to the status or column.
+The last exit must be in the window. Issues still in the stage at cutoff are excluded from its completed mean.
+Moves between statuses of the same column contribute continuous time to that column.
+
+Set `metrics.lead_time.time_basis` and `metrics.aging.time_basis` independently.
+`working` (default) counts Monday to Friday in the report timezone. `calendar` counts all elapsed time.
+Both divide the included hours by 24. Estimate accuracy retains its own calendar and time basis.
+`metrics.lead_time.start_by_type` optionally maps issue type IDs to current start status IDs.
+Types absent from the mapping use the common start.
 
 **Stage mean = sum of eligible issue durations / eligible issue count.**
 Each stage can have a different cohort. The strip reuses the exact column means from table 4.1,
@@ -85,18 +135,15 @@ Edges are deduplicated. Parent/link histories and creation dates restore the cut
 An issue's own epic parent does not mean that issue is decomposed.
 Missing/restricted children and cycles are unknown, not proof of no children.
 
-Open unsplit candidates have known zero children and a first-entry age above the completed
+Open unsplit candidates have known zero children and cumulative time above the completed
 mean of their **current status**. This flags long elapsed time, including waiting;
 it does not establish a large amount of work. No closed-task warning list is produced.
 
 ## Time in status
 
-**Open age = cutoff − first confirmed entry into the current status.**
-Returning to a status does not reset age. The comparison threshold is the completed
-first-entry/last-exit mean for the same status, with the last exit in the period.
-The JSON also retains the current continuous visit for comparison.
-
-Only statuses with above-mean open issues appear, with the four oldest shown per status.
+**Open status time = sum of visits to the current status, including the current visit up to the cutoff.**
+The JSON contains every open issue with a confirmed current visit, plus the duration of that visit.
+The table shows up to four issues with the most cumulative time per status without a threshold.
 Order follows configured columns/statuses from right to left. Configured Done and statuses in
 Jira's Done category are excluded. The completed Aging status table shows configured statuses only.
 

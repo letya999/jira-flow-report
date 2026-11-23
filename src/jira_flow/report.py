@@ -11,7 +11,7 @@ from pathlib import Path
 import yaml
 
 from . import __version__
-from .config import instant, load_config
+from .config import instant, load_config, metric_status_ids, selected_assignee_ids, status_definitions
 from .colours import checked_palette
 from .decomposition import calculate_decomposition
 from .jira_client import JiraClient, export_issue
@@ -26,7 +26,7 @@ def _check_coverage(snapshot, config):
         raise ValueError("Changing the cutoff requires a fresh run: exported membership is fixed at period end")
     if not set(config["jira"]["issue_type_ids"]) <= set(coverage["issue_type_ids"]):
         raise ValueError("Snapshot does not cover the requested issue types")
-    previous, requested = coverage["assignee_ids"], config["assignee_ids"]
+    previous, requested = coverage["assignee_ids"], selected_assignee_ids(config)
     if previous and (not requested or not set(requested) <= set(previous)):
         raise ValueError("Snapshot does not cover the requested assignees")
     if not set(config["fields"].values()) <= set(coverage["field_ids"]):
@@ -35,12 +35,14 @@ def _check_coverage(snapshot, config):
     if meta[config["fields"]["assignee_id"]].get("schema", {}).get("type") != "user":
         raise ValueError("The assignee field must be a single-user field")
     if "status_ids" in snapshot["metadata"]:
-        configured = {s for column in config["columns"].values() for s in column["status_ids"]}
-        configured.update(boundary["id"] for metric in ("throughput", "lead_time")
-                          for boundary in (config["metrics"][metric]["start"], config["metrics"][metric]["end"])
-                          if boundary and boundary["type"] == "status")
+        configured = {s["id"] for s in status_definitions(config)}
+        configured.update(metric_status_ids(config))
         if configured-set(snapshot["metadata"]["status_ids"]):
             raise ValueError("Snapshot does not cover the configured status IDs")
+        if snapshot["metadata"].get("status_catalog_complete"):
+            historical = {old["id"] for s in status_definitions(config) for old in s.get("legacy", []) if "id" in old}
+            if historical-set(snapshot["metadata"]["status_ids"]):
+                raise ValueError("Unknown configured legacy status IDs")
 
 
 def _csv_value(value):
@@ -59,7 +61,7 @@ def write_csv(path, issues, metrics):
                "current_status_id", "current_status_name", "period_end_status_id", "period_end_status_name",
                "assignee_id", "assignee_name", "priority_id", "priority_name", "estimate_before_start",
                "lead_days", "direct_children", "descendants", "decomposition_depth", "child_keys",
-               "field_values", "status_history", "field_history", "change_timestamps"]
+               "lead_start_source", "resolved_status_history", "field_values", "status_history", "field_history", "change_timestamps"]
     with path.open("w", encoding="utf-8-sig", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=columns)
         writer.writeheader()
@@ -72,6 +74,8 @@ def write_csv(path, issues, metrics):
                         "priority_id": issue["priority_at_period_end"]["id"], "priority_name": issue["priority_at_period_end"]["name"],
                         "estimate_before_start": estimates.get(issue["key"], {}).get("estimate"),
                         "lead_days": leads.get(issue["key"], {}).get("days"),
+                        "lead_start_source": leads.get(issue["key"], {}).get("start_source"),
+                        "resolved_status_history": issue.get("resolved_status_history", []),
                         "direct_children": decomposition.get(issue["key"], {}).get("direct"),
                         "descendants": decomposition.get(issue["key"], {}).get("descendants"),
                         "decomposition_depth": decomposition.get(issue["key"], {}).get("depth"),
@@ -108,7 +112,7 @@ def build_artifacts(snapshot, config):
     issues = [i for i in snapshot["issues"] if i["key"] in selected]
     snapshot = {**snapshot, "issues": issues}
     snapshot["metadata"] = {**snapshot["metadata"], "coverage": {
-        **snapshot["metadata"]["coverage"], "assignee_ids": config["assignee_ids"],
+        **snapshot["metadata"]["coverage"], "assignee_ids": selected_assignee_ids(config),
         "issue_type_ids": config["jira"]["issue_type_ids"],
     }}
     metrics["generator_version"] = __version__
@@ -118,7 +122,7 @@ def build_artifacts(snapshot, config):
     metrics["validation"]["complete_histories"] = True
     metrics["chart_colours"] = {kind: checked_palette(metrics["cfd_"+kind]) for kind in ("columns", "statuses")}
     metrics["validation"]["chart_colour_checks"] = True
-    mapping = {frozenset(col["status_ids"]) for col in config["columns"].values()}
+    mapping = {frozenset(s["id"] for s in col["statuses"]) for col in config["columns"].values()}
     board = snapshot["metadata"].get("board")
     if board:
         actual = {frozenset(str(s["id"]) for s in col["statuses"]) for col in board["columnConfig"]["columns"]}
@@ -160,8 +164,9 @@ def run_report(config_path=None, overrides=None, input_path=None, env_file=".env
             "base_url": source["base_url"], "fetched_at": source["fetched_at"], "query": source["query"],
             "project_name": source["project_name"], "status_categories": source["status_categories"],
             "field_metadata": source["field_metadata"], "board": source["board"], "status_ids": source["status_ids"],
+            "status_catalog": source["status_catalog"], "status_catalog_complete": source["status_catalog_complete"],
             "coverage": {"project_key": config["jira"]["project_key"], "field_ids": list(config["fields"].values()),
-                         "assignee_ids": config["assignee_ids"], "issue_type_ids": config["jira"]["issue_type_ids"],
+                         "assignee_ids": selected_assignee_ids(config), "issue_type_ids": config["jira"]["issue_type_ids"],
                          "period_end": config["period"]["end"]}},
             "issues": [export_issue(record, config) for record in source["records"]],
             "hierarchy": client.fetch_hierarchy(config)}

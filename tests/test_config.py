@@ -25,13 +25,39 @@ def test_yaml_and_parameter_only_configuration_are_equivalent(config, tmp_path):
 
 def test_invalid_mapping_and_naive_timestamps_fail(config):
     bad = copy.deepcopy(config)
-    bad["columns"]["review"]["status_ids"] = ["2"]
+    bad["columns"]["review"]["statuses"] = [{"id": "2", "name": "Duplicate"}]
     with pytest.raises(ValueError, match="multiple columns"):
         validate(bad)
     bad = copy.deepcopy(config)
     bad["period"]["start"] = "2026-09-01T00:00:00"
     with pytest.raises(ValueError, match="offset"):
         validate(bad)
+
+
+def test_named_status_schema_and_legacy_conflicts(config):
+    config["columns"]["development"]["statuses"][0]["legacy"] = [
+        {"id": "9", "name": "Old work"}, {"name": "Older work"}]
+    validate(config)
+    conflicting = copy.deepcopy(config)
+    conflicting["columns"]["review"]["statuses"][0]["legacy"] = [{"name": "Old work"}]
+    with pytest.raises(ValueError, match="Ambiguous legacy"):
+        validate(conflicting)
+    conflicting = copy.deepcopy(config)
+    conflicting["columns"]["review"]["statuses"][0]["legacy"] = [{"id": "2"}]
+    with pytest.raises(ValueError, match="current status"):
+        validate(conflicting)
+    conflicting = copy.deepcopy(config)
+    conflicting["columns"]["review"]["statuses"][0]["legacy"] = [{}]
+    with pytest.raises(ValueError, match="Legacy statuses"):
+        validate(conflicting)
+
+
+def test_legacy_column_format_is_upgraded_without_changing_status_ids(config):
+    old = {key: {"label": col["name"], "status_ids": [s["id"] for s in col["statuses"]]}
+           for key, col in config["columns"].items()}
+    upgraded = load_config(None, {**config, "columns": old})
+    assert upgraded["columns"]["development"] == {
+        "name": "Work", "statuses": [{"id": "2", "name": "2"}, {"id": "5", "name": "5"}]}
 
 
 def test_exact_five_files_and_offline_cli_replay(config, tmp_path, capsys):
@@ -74,3 +100,32 @@ def test_exact_five_files_and_offline_cli_replay(config, tmp_path, capsys):
     assert first == third
     with pytest.raises(ValueError, match="cutoff"):
         run_report(cfg_file, {"period.end": "2026-09-23T00:00:00+03:00"}, directory/"issues.json")
+
+
+
+def test_time_basis_type_start_and_account_groups_in_config(config):
+    config["metrics"]["lead_time"].pop("time_basis")
+    config["metrics"]["aging"] = {"method": "first_entry_to_last_exit"}
+    path = Path(config["output_root"]).parent/"team.yaml"
+    path.write_text(yaml.safe_dump(config), encoding="utf-8")
+    prepared = load_config(path, {"metrics.lead_time.start_by_type.1": ["5", "3"]})
+    assert prepared["metrics"]["lead_time"]["time_basis"] == "working"
+    assert prepared["metrics"]["lead_time"]["start_by_type"] == {"1": ["5", "3"]}
+    assert prepared["metrics"]["aging"] == {"method": "sum_visits", "time_basis": "working"}
+    with pytest.raises(ValueError, match="configured issue type IDs"):
+        load_config(path, {"metrics.lead_time.start_by_type.99": ["5"]})
+    with pytest.raises(ValueError, match="non-overlapping"):
+        load_config(path, {"people_merge": [{"ids": ["A", "A2"], "name": "One"},
+                                            {"ids": ["A2", "A3"], "name": "Two"}]})
+
+
+def test_offline_scope_requires_all_accounts_in_selected_alias_groups(config):
+    source = snapshot(config, [issue(config)])
+    config["people_merge"] = [{"ids": ["A", "A2"], "name": "Unified owner"}]
+    with pytest.raises(ValueError, match="requested assignees"):
+        build_artifacts(source, config)
+    source["metadata"]["coverage"]["assignee_ids"] = ["A", "A2"]
+    output = build_artifacts(source, config)
+    issues = json.loads((output/"issues.json").read_text(encoding="utf-8"))
+    assert issues["metadata"]["coverage"]["assignee_ids"] == ["A", "A2"]
+    assert issues["issues"][0]["assignee_at_period_end"] == {"id": "A", "name": "Unified owner"}
